@@ -7,6 +7,7 @@ namespace CG.Web.MegaApiClient
   using System.Reflection;
   using System.Text;
   using System.Threading;
+  using System.Threading.Tasks;
 
   public class WebClient : IWebClient
   {
@@ -31,10 +32,14 @@ namespace CG.Web.MegaApiClient
         return this.PostRequest(url, jsonStream, "application/json");
       }
     }
-
     public string PostRequestRaw(Uri url, Stream dataStream)
     {
       return this.PostRequest(url, dataStream, "application/octet-stream");
+    }
+
+    public Task<string> PostRequestRawAsync(Uri url, Stream dataStream)
+    {
+      return this.PostRequestAsync(url, dataStream, "application/octet-stream");
     }
 
     public Stream GetRequestRaw(Uri url)
@@ -43,6 +48,34 @@ namespace CG.Web.MegaApiClient
       request.Method = "GET";
 
       return request.GetResponse().GetResponseStream();
+    }
+
+    private Task<string> PostRequestAsync(Uri url, Stream dataStream, string contentType)
+    {
+      return Task.Factory.StartNew(() =>
+      {
+        HttpWebRequest request = this.CreateRequest(url);
+        request.ContentLength = dataStream.Length;
+        request.Method = "POST";
+        request.ContentType = contentType;
+
+        using (Stream requestStream = request.GetRequestStream())
+        {
+          dataStream.Position = 0;
+          dataStream.CopyTo(requestStream, this.BufferSize);
+        }
+
+        using (HttpWebResponse response = (HttpWebResponse) request.GetResponse())
+        {
+          using (Stream responseStream = response.GetResponseStream())
+          {
+            using (StreamReader streamReader = new StreamReader(responseStream, Encoding.UTF8))
+            {
+              return streamReader.ReadToEnd();
+            }
+          }
+        }
+      });
     }
 
     private string PostRequest(Uri url, Stream dataStream, string contentType)

@@ -134,10 +134,8 @@ namespace CG.Web.MegaApiClient
       }, cancellationToken.GetValueOrDefault());
     }
 
-    public Task<INode> UploadAsync(Stream stream, string name, INode parent, IProgress<double> progress, DateTime? modificationDate = null, CancellationToken? cancellationToken = null)
+    public async Task<INode> UploadAsync(Stream stream, string name, INode parent, IProgress<double> progress, DateTime? modificationDate = null, CancellationToken? cancellationToken = null)
     {
-      return Task.Run(() =>
-      {
         if (stream == null)
         {
           throw new ArgumentNullException("stream");
@@ -145,21 +143,17 @@ namespace CG.Web.MegaApiClient
 
         using (Stream progressionStream = new ProgressionStream(stream, progress, this.options.ReportProgressChunkSize))
         {
-          return this.Upload(progressionStream, name, parent, modificationDate, cancellationToken);
+          return await this.UploadAsync(progressionStream, name, parent, modificationDate, cancellationToken);
         }
-      }, cancellationToken.GetValueOrDefault());
     }
 
-    public Task<INode> UploadFileAsync(string filename, INode parent, IProgress<double> progress, CancellationToken? cancellationToken = null)
+    public async Task<INode> UploadFileAsync(string filename, INode parent, IProgress<double> progress, CancellationToken? cancellationToken = null)
     {
-      return Task.Run(() =>
-      {
-        DateTime modificationDate = File.GetLastWriteTime(filename);
+        var modificationDate = File.GetLastWriteTime(filename);
         using (Stream stream = new ProgressionStream(new FileStream(filename, FileMode.Open, FileAccess.Read), progress, this.options.ReportProgressChunkSize))
         {
-          return this.Upload(stream, Path.GetFileName(filename), parent, modificationDate, cancellationToken);
+          return await this.UploadAsync(stream, Path.GetFileName(filename), parent, modificationDate, cancellationToken);
         }
-      }, cancellationToken.GetValueOrDefault());
     }
 
     public Task<INodeInfo> GetNodeFromLinkAsync(Uri uri)

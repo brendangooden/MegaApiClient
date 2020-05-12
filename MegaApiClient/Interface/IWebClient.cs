@@ -2,6 +2,7 @@
 {
   using System;
   using System.IO;
+  using System.Threading.Tasks;
 
   public interface IWebClient
   {
@@ -12,5 +13,6 @@
     string PostRequestRaw(Uri url, Stream dataStream);
 
     Stream GetRequestRaw(Uri url);
+    Task<string> PostRequestRawAsync(Uri uri, Stream chunkStream);
   }
 }

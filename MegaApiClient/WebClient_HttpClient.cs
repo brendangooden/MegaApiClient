@@ -9,6 +9,7 @@ namespace CG.Web.MegaApiClient
 
   using System.Net.Http;
   using System.Net.Http.Headers;
+  using System.Threading.Tasks;
 
   public class WebClient : IWebClient
   {
@@ -40,6 +41,11 @@ namespace CG.Web.MegaApiClient
       }
     }
 
+    public async Task<string> PostRequestRawAsync(Uri url, Stream dataStream)
+    {
+      return await this.PostRequestAsync(url, dataStream, "application/octet-stream");
+    }
+
     public string PostRequestRaw(Uri url, Stream dataStream)
     {
       return this.PostRequest(url, dataStream, "application/octet-stream");
@@ -50,16 +56,34 @@ namespace CG.Web.MegaApiClient
       return this.httpClient.GetStreamAsync(url).Result;
     }
 
-    private string PostRequest(Uri url, Stream dataStream, string contentType)
+    private async Task<string> PostRequestAsync(Uri url, Stream dataStream, string contentType)
     {
-      using (StreamContent content = new StreamContent(dataStream, this.BufferSize))
+      using (var content = new StreamContent(dataStream, this.BufferSize))
       {
         content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
-        using (HttpResponseMessage response = this.httpClient.PostAsync(url, content).Result)
+        using (var response = await this.httpClient.PostAsync(url, content))
         {
-          using (Stream stream = response.Content.ReadAsStreamAsync().Result)
+          using (var stream = await response.Content.ReadAsStreamAsync())
           {
-            using (StreamReader streamReader = new StreamReader(stream, Encoding.UTF8))
+            using (var streamReader = new StreamReader(stream, Encoding.UTF8))
+            {
+              return await streamReader.ReadToEndAsync();
+            }
+          }
+        }
+      }
+    }
+
+    private string PostRequest(Uri url, Stream dataStream, string contentType)
+    {
+      using (var content = new StreamContent(dataStream, this.BufferSize))
+      {
+        content.Headers.ContentType = new MediaTypeHeaderValue(contentType);
+        using (var response = this.httpClient.PostAsync(url, content).Result)
+        {
+          using (var stream = response.Content.ReadAsStreamAsync().Result)
+          {
+            using (var streamReader = new StreamReader(stream, Encoding.UTF8))
             {
               return streamReader.ReadToEnd();
             }

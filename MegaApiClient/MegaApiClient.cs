@@ -813,6 +813,8 @@
           long chunkStartPosition = 0;
           var chunksSizesToUpload = this.ComputeChunksSizesToUpload(encryptedStream.ChunksPositions, encryptedStream.Length).ToArray();
           Uri uri = null;
+
+
           for (int i = 0; i < chunksSizesToUpload.Length; i++)
           {
             completionHandle = string.Empty;
@@ -840,6 +842,224 @@
                   apiResult = (ApiResultCode)retCode;
                   break;
                 }
+              }
+              catch (Exception ex)
+              {
+                apiResult = ApiResultCode.RequestFailedRetry;
+                this.ApiRequestFailed?.Invoke(this, new ApiRequestFailedEventArgs(uri, attempt, retryDelay, apiResult, ex));
+
+                break;
+              }
+            }
+          }
+
+          if (apiResult != ApiResultCode.Ok)
+          {
+            this.ApiRequestFailed?.Invoke(this, new ApiRequestFailedEventArgs(uri, attempt, retryDelay, apiResult, completionHandle));
+
+            if (apiResult == ApiResultCode.RequestFailedRetry || apiResult == ApiResultCode.RequestFailedPermanetly || apiResult == ApiResultCode.TooManyRequests)
+            {
+              // Restart upload from the beginning
+              this.Wait(retryDelay);
+
+              // Reset steam position
+              stream.Seek(0, SeekOrigin.Begin);
+
+              continue;
+            }
+
+            throw new ApiException(apiResult);
+          }
+
+          // Encrypt attributes
+          byte[] cryptedAttributes = Crypto.EncryptAttributes(new Attributes(name, stream, modificationDate), encryptedStream.FileKey);
+
+          // Compute the file key
+          byte[] fileKey = new byte[32];
+          for (int i = 0; i < 8; i++)
+          {
+            fileKey[i] = (byte)(encryptedStream.FileKey[i] ^ encryptedStream.Iv[i]);
+            fileKey[i + 16] = encryptedStream.Iv[i];
+          }
+
+          for (int i = 8; i < 16; i++)
+          {
+            fileKey[i] = (byte)(encryptedStream.FileKey[i] ^ encryptedStream.MetaMac[i - 8]);
+            fileKey[i + 16] = encryptedStream.MetaMac[i - 8];
+          }
+
+          byte[] encryptedKey = Crypto.EncryptKey(fileKey, this.masterKey);
+
+          CreateNodeRequest createNodeRequest = CreateNodeRequest.CreateFileNodeRequest(parent, cryptedAttributes.ToBase64(), encryptedKey.ToBase64(), fileKey, completionHandle);
+          GetNodesResponse createNodeResponse = this.Request<GetNodesResponse>(createNodeRequest, this.masterKey);
+          return createNodeResponse.Nodes[0];
+        }
+      }
+
+      throw new UploadException(completionHandle);
+    }
+
+    private async Task<byte[]> ReadNextChunkAsync(int chunkSizeToUpload, MegaAesCtrStream encryptedStream)
+    {
+      var chunkSize = chunkSizeToUpload;
+      var chunkBuffer = new byte[chunkSize];
+      encryptedStream.Read(chunkBuffer, 0, chunkSize);
+      return chunkBuffer;
+    }
+
+    public class UploadResult
+    {
+      public UploadResultEnum Result { get; set; }
+      public ApiResultCode ResultCode { get; set; }
+      public string CompletionHandle { get; set; }
+    }
+
+    public enum UploadResultEnum
+    {
+      Continue,
+      Break
+    }
+
+    private async Task<UploadResult> UploadBaseAsync(Uri uri, Stream chunkStream)
+    {
+        var completionHandle = await this.webClient.PostRequestRawAsync(uri, chunkStream);
+        if (string.IsNullOrEmpty(completionHandle))
+        {
+          return new UploadResult()
+          {
+            Result = UploadResultEnum.Continue,
+            CompletionHandle = completionHandle,
+            ResultCode = ApiResultCode.Ok
+          };
+        }
+
+        long retCode;
+        if (completionHandle.FromBase64().Length != 27 && long.TryParse(completionHandle, out retCode))
+        {
+          return new UploadResult()
+          {
+            Result = UploadResultEnum.Break,
+            CompletionHandle = completionHandle,
+            ResultCode = (ApiResultCode)retCode
+          };
+        }
+        // Finished
+        return new UploadResult
+        {
+          Result = UploadResultEnum.Continue,
+          CompletionHandle = completionHandle
+        };
+    }
+
+    /// <summary>
+    /// Upload a stream on Mega.co.nz and attach created node to selected parent
+    /// </summary>
+    /// <param name="stream">Data to upload</param>
+    /// <param name="name">Created node name</param>
+    /// <param name="modificationDate">Custom modification date stored in the Node attributes</param>
+    /// <param name="parent">Node to attach the uploaded file (all types except <see cref="NodeType.File" /> are supported)</param>
+    /// <param name="cancellationToken">CancellationToken used to cancel the action</param>
+    /// <returns>Created node</returns>
+    /// <exception cref="NotSupportedException">Not logged in</exception>
+    /// <exception cref="ApiException">Mega.co.nz service reports an error</exception>
+    /// <exception cref="ArgumentNullException">stream or name or parent is null</exception>
+    /// <exception cref="ArgumentException">parent is not valid (all types except <see cref="NodeType.File" /> are supported)</exception>
+    public async Task<INode> UploadAsync(Stream stream, string name, INode parent, DateTime? modificationDate = null, CancellationToken? cancellationToken = null)
+    {
+      if (stream == null)
+      {
+        throw new ArgumentNullException("stream");
+      }
+
+      if (string.IsNullOrEmpty(name))
+      {
+        throw new ArgumentNullException("name");
+      }
+
+      if (parent == null)
+      {
+        throw new ArgumentNullException("parent");
+      }
+
+      if (parent.Type == NodeType.File)
+      {
+        throw new ArgumentException("Invalid parent node");
+      }
+
+      this.EnsureLoggedIn();
+
+      if (cancellationToken.HasValue)
+      {
+        stream = new CancellableStream(stream, cancellationToken.Value);
+      }
+
+      string completionHandle = string.Empty;
+      int attempt = 0;
+      while (this.options.ComputeApiRequestRetryWaitDelay(++attempt, out var retryDelay))
+      {
+        // Retrieve upload URL
+        UploadUrlRequest uploadRequest = new UploadUrlRequest(stream.Length);
+        UploadUrlResponse uploadResponse = this.Request<UploadUrlResponse>(uploadRequest);
+
+        ApiResultCode apiResult = ApiResultCode.Ok;
+
+        using (MegaAesCtrStreamCrypter encryptedStream = new MegaAesCtrStreamCrypter(stream))
+        {
+          long chunkStartPosition = 0;
+          var chunksSizesToUpload = this.ComputeChunksSizesToUpload(encryptedStream.ChunksPositions, encryptedStream.Length).ToArray();
+          Uri uri = null;
+
+          // Read First Chunk and process
+          var chunkBuffer1 = await ReadNextChunkAsync(chunksSizesToUpload[0], encryptedStream);
+
+          Task<byte[]> chunkTask = null;
+
+          for (int i = 0; i < chunksSizesToUpload.Length; i++)
+          {
+            completionHandle = string.Empty;
+
+            var chunkBuffer = new byte[chunksSizesToUpload[i]];
+
+            if (chunkTask is null) // first one only
+            {
+              chunkBuffer1.CopyTo(chunkBuffer, 0);
+            }
+            else
+            {
+              chunkBuffer = await chunkTask;
+            }
+            
+            if (i + 1 < chunksSizesToUpload.Length)
+            {
+              chunkTask = ReadNextChunkAsync(chunksSizesToUpload[i + 1], encryptedStream);
+            }
+            else
+            {
+
+            }
+
+
+
+            using (var chunkStream = new MemoryStream(chunkBuffer))
+            {
+              uri = new Uri(uploadResponse.Url + "/" + chunkStartPosition);
+              chunkStartPosition += chunksSizesToUpload[i];
+
+              try
+              {
+                var uploadTask = UploadBaseAsync(uri, chunkStream);
+
+                await Task.WhenAll(chunkTask, uploadTask);
+
+                var result = await uploadTask;
+                
+                completionHandle = result.CompletionHandle;
+                apiResult = result.ResultCode;
+
+                if (result.Result == UploadResultEnum.Break)
+                  break;
+                if(result.Result == UploadResultEnum.Continue)
+                  continue;
               }
               catch (Exception ex)
               {
