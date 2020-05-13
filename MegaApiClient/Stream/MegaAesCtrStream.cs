@@ -6,7 +6,7 @@
   using System.Linq;
   using System.Security.Cryptography;
 
-  internal class MegaAesCtrStreamCrypter : MegaAesCtrStream
+  public class MegaAesCtrStreamCrypter : MegaAesCtrStream
   {
     public MegaAesCtrStreamCrypter(Stream stream)
       : base(stream, stream.Length, Mode.Crypt, Crypto.CreateAesKey(), Crypto.CreateAesKey().CopySubArray(8))
@@ -61,7 +61,7 @@
     }
   }
 
-  internal abstract class MegaAesCtrStream : Stream
+  public abstract class MegaAesCtrStream : Stream
   {
     protected readonly byte[] fileKey;
     protected readonly byte[] iv;
