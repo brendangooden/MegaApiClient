@@ -101,7 +101,7 @@
       this.fileKey = fileKey;
       this.iv = iv;
 
-      this.ChunksPositions = this.GetChunksPositions(this.streamLength).ToArray();
+      this.ChunksPositions = GetChunksPositions(this.streamLength).ToArray();
       this.chunksPositionsCache = new HashSet<long>(this.ChunksPositions);
 
       this.encryptor = Crypto.CreateAesEncryptor(this.fileKey);
@@ -291,7 +291,7 @@
       this.fileMac = Crypto.EncryptAes(this.fileMac, encryptor);
     }
 
-    private IEnumerable<long> GetChunksPositions(long size)
+    public static IEnumerable<long> GetChunksPositions(long size)
     {
       yield return 0;
 

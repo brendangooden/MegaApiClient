@@ -107,21 +107,14 @@ namespace CG.Web.MegaApiClient
       }, cancellationToken.GetValueOrDefault());
     }
 
-    public Task DownloadFileAsync(INode node, string outputFile, IProgress<double> progress, CancellationToken? cancellationToken = null)
+    public async Task DownloadFileAsync(INode node, string outputFile, IProgress<double> progress, CancellationToken? cancellationToken = null)
     {
-      return Task.Run(() =>
-      {
-        using (Stream stream = new ProgressionStream(this.Download(node, cancellationToken), progress, this.options.ReportProgressChunkSize))
-        {
-          this.SaveStream(stream, outputFile);
-        }
-      }, cancellationToken.GetValueOrDefault());
+      await this.DownloadAsync(node, outputFile, cancellationToken);       
     }
 
-    public Task DownloadFileAsync(Uri uri, string outputFile, IProgress<double> progress, CancellationToken? cancellationToken = null)
+    public async Task DownloadFileAsync(Uri uri, string outputFile, IProgress<double> progress, CancellationToken? cancellationToken = null)
     {
-      return Task.Run(() =>
-      {
+
         if (string.IsNullOrEmpty(outputFile))
         {
           throw new ArgumentNullException("outputFile");
@@ -131,7 +124,7 @@ namespace CG.Web.MegaApiClient
         {
           this.SaveStream(stream, outputFile);
         }
-      }, cancellationToken.GetValueOrDefault());
+
     }
 
     public async Task<INode> UploadAsync(Stream stream, string name, INode parent, IProgress<double> progress, DateTime? modificationDate = null, CancellationToken? cancellationToken = null)
@@ -150,10 +143,17 @@ namespace CG.Web.MegaApiClient
     public async Task<INode> UploadFileAsync(string filename, INode parent, IProgress<double> progress, CancellationToken? cancellationToken = null)
     {
         var modificationDate = File.GetLastWriteTime(filename);
-        using (Stream stream = new ProgressionStream(new FileStream(filename, FileMode.Open, FileAccess.Read), progress, this.options.ReportProgressChunkSize))
+        INode node = null;
+
+        using(var fileStream = new FileStream(filename, FileMode.Open, FileAccess.Read))
         {
-          return await this.UploadAsync(stream, Path.GetFileName(filename), parent, modificationDate, cancellationToken);
+          using (Stream stream = new ProgressionStream(fileStream, progress, this.options.ReportProgressChunkSize))
+          {
+            node = await this.UploadAsync(stream, Path.GetFileName(filename), parent, modificationDate, cancellationToken);
+          }
         }
+
+        return node;
     }
 
     public Task<INodeInfo> GetNodeFromLinkAsync(Uri uri)

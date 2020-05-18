@@ -611,16 +611,58 @@
       DownloadUrlRequest downloadRequest = new DownloadUrlRequest(node);
       DownloadUrlResponse downloadResponse = this.Request<DownloadUrlResponse>(downloadRequest);
 
-      Stream dataStream = new BufferedStream(this.webClient.GetRequestRaw(new Uri(downloadResponse.Url)));
+      return this.webClient.GetRequestRaw(new Uri(downloadResponse.Url));
 
-      Stream resultStream = new MegaAesCtrStreamDecrypter(dataStream, downloadResponse.Size, nodeCrypto.Key, nodeCrypto.Iv, nodeCrypto.MetaMac);
+      //Stream resultStream = new MegaAesCtrStreamDecrypter(dataStream, downloadResponse.Size, nodeCrypto.Key, nodeCrypto.Iv, nodeCrypto.MetaMac);
 
-      if (cancellationToken.HasValue)
+      //if (cancellationToken.HasValue)
+      //{
+      //  resultStream = new CancellableStream(resultStream, cancellationToken.Value);
+      //}
+    }
+
+    /// <summary>
+    /// Retrieve a Stream to download and decrypt the specified node
+    /// </summary>
+    /// <param name="node">Node to download (only <see cref="NodeType.File" /> can be downloaded)</param>
+    /// <param name="cancellationToken">CancellationToken used to cancel the action</param>
+    /// <exception cref="NotSupportedException">Not logged in</exception>
+    /// <exception cref="ApiException">Mega.co.nz service reports an error</exception>
+    /// <exception cref="ArgumentNullException">node or outputFile is null</exception>
+    /// <exception cref="ArgumentException">node is not valid (only <see cref="NodeType.File" /> can be downloaded)</exception>
+    /// <exception cref="DownloadException">Checksum is invalid. Downloaded data are corrupted</exception>
+    public async Task DownloadAsync(INode node, string downloadLocation, CancellationToken? cancellationToken = null)
+    {
+      if (node == null)
       {
-        resultStream = new CancellableStream(resultStream, cancellationToken.Value);
+        throw new ArgumentNullException("node");
       }
 
-      return resultStream;
+      if (node.Type != NodeType.File)
+      {
+        throw new ArgumentException("Invalid node");
+      }
+
+      INodeCrypto nodeCrypto = node as INodeCrypto;
+      if (nodeCrypto == null)
+      {
+        throw new ArgumentException("node must implement INodeCrypto");
+      }
+
+      this.EnsureLoggedIn();
+
+      // Retrieve download URL
+      DownloadUrlRequest downloadRequest = new DownloadUrlRequest(node);
+      DownloadUrlResponse downloadResponse = this.Request<DownloadUrlResponse>(downloadRequest);
+
+      await this.webClient.DownloadAsync(new Uri(downloadResponse.Url), downloadLocation, 10);
+
+      //Stream resultStream = new MegaAesCtrStreamDecrypter(dataStream, downloadResponse.Size, nodeCrypto.Key, nodeCrypto.Iv, nodeCrypto.MetaMac);
+
+      //if (cancellationToken.HasValue)
+      //{
+      //  resultStream = new CancellableStream(resultStream, cancellationToken.Value);
+      //}
     }
 
     /// <summary>
@@ -1003,10 +1045,13 @@
 
         ApiResultCode apiResult = ApiResultCode.Ok;
 
-        using (MegaAesCtrStreamCrypter encryptedStream = new MegaAesCtrStreamCrypter(stream))
+        using (var encryptedStream = 
+          //stream
+          new MegaAesCtrStreamCrypter(stream)
+          )
         {
           long chunkStartPosition = 0;
-          var chunksSizesToUpload = this.ComputeChunksSizesToUpload(encryptedStream.ChunksPositions, encryptedStream.Length).ToArray();
+          var chunksSizesToUpload = this.ComputeChunksSizesToUpload(MegaAesCtrStreamCrypter.GetChunksPositions(encryptedStream.Length).ToArray(), encryptedStream.Length).ToArray();
           Uri uri = null;
 
           // Read First Chunk and process
@@ -1033,12 +1078,10 @@
             {
               chunkTask = ReadNextChunkAsync(chunksSizesToUpload[i + 1], encryptedStream);
             }
-            else
+            else if (chunksSizesToUpload.Length == 1)
             {
-
+              chunkTask = Task.FromResult(chunkBuffer);
             }
-
-
 
             using (var chunkStream = new MemoryStream(chunkBuffer))
             {
@@ -1047,6 +1090,7 @@
 
               try
               {
+                GC.Collect();
                 var uploadTask = UploadBaseAsync(uri, chunkStream);
 
                 await Task.WhenAll(chunkTask, uploadTask);
@@ -1344,9 +1388,61 @@
       return builder.Uri;
 #endif
     }
+    public static byte[] ReadToEnd(System.IO.Stream stream)
+    {
+      long originalPosition = 0;
 
+      if (stream.CanSeek)
+      {
+        originalPosition = stream.Position;
+        stream.Position = 0;
+      }
+
+      try
+      {
+        byte[] readBuffer = new byte[4096];
+
+        int totalBytesRead = 0;
+        int bytesRead;
+
+        while ((bytesRead = stream.Read(readBuffer, totalBytesRead, readBuffer.Length - totalBytesRead)) > 0)
+        {
+          totalBytesRead += bytesRead;
+
+          if (totalBytesRead == readBuffer.Length)
+          {
+            int nextByte = stream.ReadByte();
+            if (nextByte != -1)
+            {
+              byte[] temp = new byte[readBuffer.Length * 2];
+              Buffer.BlockCopy(readBuffer, 0, temp, 0, readBuffer.Length);
+              Buffer.SetByte(temp, totalBytesRead, (byte)nextByte);
+              readBuffer = temp;
+              totalBytesRead++;
+            }
+          }
+        }
+
+        byte[] buffer = readBuffer;
+        if (readBuffer.Length != totalBytesRead)
+        {
+          buffer = new byte[totalBytesRead];
+          Buffer.BlockCopy(readBuffer, 0, buffer, 0, totalBytesRead);
+        }
+        return buffer;
+      }
+      finally
+      {
+        if (stream.CanSeek)
+        {
+          stream.Position = originalPosition;
+        }
+      }
+    }
     private void SaveStream(Stream stream, string outputFile)
     {
+      var result = ReadToEnd(stream);
+
       using (FileStream fs = new FileStream(outputFile, FileMode.CreateNew, FileAccess.Write))
       {
         stream.CopyTo(fs, this.options.BufferSize);

@@ -27,7 +27,7 @@ namespace CG.Web.MegaApiClient
       this.BufferSize = Options.DefaultBufferSize;
       this.httpClient = messageHandler == null ? new HttpClient() : new HttpClient(messageHandler);
       this.httpClient.Timeout = TimeSpan.FromMilliseconds(responseTimeout);
-      this.httpClient.DefaultRequestHeaders.UserAgent.Add(userAgent ?? this.GenerateUserAgent());
+      this.httpClient.DefaultRequestHeaders.UserAgent.Add(userAgent ?? GenerateUserAgent());
       this.httpClient.DefaultRequestHeaders.ConnectionClose = connectionClose;
     }
 
@@ -49,6 +49,16 @@ namespace CG.Web.MegaApiClient
     public string PostRequestRaw(Uri url, Stream dataStream)
     {
       return this.PostRequest(url, dataStream, "application/octet-stream");
+    }
+
+    public async Task DownloadAsync(Uri url, string downloadLocation, int numberOfParallelDownloads = 0)
+    {
+      await Downloader.DownloadAsync(httpClient, url, downloadLocation, numberOfParallelDownloads, false);
+    }
+
+    public async Task<Stream> GetRequestRawAsync(Uri url)
+    {
+        return await this.httpClient.GetStreamAsync(url);
     }
 
     public Stream GetRequestRaw(Uri url)
@@ -92,10 +102,9 @@ namespace CG.Web.MegaApiClient
       }
     }
 
-    private ProductInfoHeaderValue GenerateUserAgent()
+    public static ProductInfoHeaderValue GenerateUserAgent()
     {
-      AssemblyName assemblyName = this.GetType().GetTypeInfo().Assembly.GetName();
-      return new ProductInfoHeaderValue(assemblyName.Name, assemblyName.Version.ToString(2));
+            return new ProductInfoHeaderValue("MegaApiClient", "1.0.0");
     }
   }
 }

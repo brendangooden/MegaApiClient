@@ -13,6 +13,8 @@
     string PostRequestRaw(Uri url, Stream dataStream);
 
     Stream GetRequestRaw(Uri url);
+    Task<Stream> GetRequestRawAsync(Uri url);
     Task<string> PostRequestRawAsync(Uri uri, Stream chunkStream);
+    Task DownloadAsync(Uri url, string downloadLocation, int numberOfParallelDownloads = 0);
   }
 }
